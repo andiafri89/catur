@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Premium Chess Game with full rules, elegant design, and smooth gameplay">
+    <title>♚ Chess Master — Premium Chess Game</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="game-header">
+            <div class="header-left">
+                <h1 class="game-title">♚ Chess Master</h1>
+            </div>
+            <div class="header-center">
+                <div class="player-info white-player">
+                    <span class="player-dot white-dot"></span>
+                    <span class="player-name" id="whitePlayerName">White</span>
+                </div>
+                <div class="game-status-container">
+                    <div class="game-status" id="gameStatus">Your Turn</div>
+                    <div class="turn-indicator" id="turnIndicator"></div>
+                </div>
+                <div class="player-info black-player">
+                    <span class="player-name" id="blackPlayerName">Black</span>
+                    <span class="player-dot black-dot"></span>
+                </div>
+            </div>
+            <div class="header-right">
+                <button class="btn btn-icon" id="btnUndo" title="Undo Move">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10h13a4 4 0 0 1 0 8H7"/><path d="M7 6l-4 4 4 4"/></svg>
+                </button>
+                <button class="btn btn-icon" id="btnFlip" title="Flip Board">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M8 12h8"/><path d="M12 8v8"/></svg>
+                </button>
+                <button class="btn btn-toggle" id="btnGameMode" title="Toggle Game Mode">
+                    <span class="mode-indicator" id="modeIndicator"></span>
+                    <span class="mode-label" id="modeLabel">vs AI</span>
+                </button>
+                <span class="online-code-badge" id="onlineCodeBadge" style="display:none"></span>
+                <button class="btn btn-primary" id="btnNewGame">New Game</button>
+            </div>
+        </header>
+
+        <main class="game-main">
+            <div class="board-side left-side">
+                <div class="captured-pieces">
+                    <h3 class="panel-title">Captured</h3>
+                    <div class="captured-white" id="capturedBlackPieces"></div>
+                    <div class="captured-black" id="capturedWhitePieces"></div>
+                </div>
+            </div>
+
+            <div class="board-container">
+                <div class="board-wrapper">
+                    <div class="board-coords board-coords-rank" id="rankCoords"></div>
+                    <div class="board-area">
+                        <div class="board-coords board-coords-file" id="fileCoords"></div>
+                        <div class="board" id="board"></div>
+                    </div>
+                    <div class="promotion-modal" id="promotionModal">
+                        <div class="promotion-content">
+                            <h3>Promote Pawn</h3>
+                            <div class="promotion-pieces" id="promotionPieces"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="board-side right-side">
+                <div class="move-history-panel">
+                    <h3 class="panel-title">Moves</h3>
+                    <div class="move-history" id="moveHistory">
+                        <div class="move-history-empty">No moves yet</div>
+                    </div>
+                </div>
+                <div class="game-controls">
+                    <button class="btn btn-secondary" id="btnResign">Resign</button>
+                    <button class="btn btn-secondary" id="btnDraw">Offer Draw</button>
+                </div>
+            </div>
+        </main>
+
+        <div class="game-modal-overlay" id="gameOverModal">
+            <div class="game-modal">
+                <div class="game-modal-icon" id="gameModalIcon">👑</div>
+                <h2 class="game-modal-title" id="gameModalTitle">Game Over</h2>
+                <p class="game-modal-subtitle" id="gameModalSubtitle">Checkmate!</p>
+                <div class="modal-buttons" id="gameModalButtons">
+                    <button class="btn btn-primary btn-large" id="btnPlayAgain">Play Again</button>
+                    <button class="btn btn-secondary btn-large" id="btnRematch" style="display:none">Request Rematch</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========== ONLINE LOBBY MODAL ========== -->
+        <div class="online-overlay" id="onlineOverlay">
+            <div class="online-modal">
+                <button class="online-close" id="onlineClose">✕</button>
+                <div class="online-modal-icon">🌐</div>
+                <h2 class="online-modal-title">Online Chess</h2>
+                <p class="online-modal-subtitle">Play with friends in real-time</p>
+
+                <div class="online-tabs">
+                    <button class="online-tab active" id="onlineTabCreate">Create Game</button>
+                    <button class="online-tab" id="onlineTabJoin">Join Game</button>
+                </div>
+
+                <!-- Create Game -->
+                <div class="online-panel" id="onlinePanelCreate">
+                    <div class="online-field">
+                        <label class="online-label">Your Name</label>
+                        <input class="online-input" id="onlineNameCreate" type="text" placeholder="Enter your name..." maxlength="20" value="Player 1">
+                    </div>
+                    <div class="online-field">
+                        <label class="online-label">Server URL</label>
+                        <input class="online-input" id="onlineServerUrl" type="text" value="ws://localhost:8765">
+                    </div>
+                    <button class="btn btn-primary btn-online-action" id="onlineBtnCreate">
+                        <span class="online-btn-icon">🎮</span>
+                        Create Game
+                    </button>
+                </div>
+
+                <!-- Join Game -->
+                <div class="online-panel" id="onlinePanelJoin" style="display:none">
+                    <div class="online-field">
+                        <label class="online-label">Your Name</label>
+                        <input class="online-input" id="onlineNameJoin" type="text" placeholder="Enter your name..." maxlength="20" value="Player 2">
+                    </div>
+                    <div class="online-field">
+                        <label class="online-label">Game Code</label>
+                        <input class="online-input online-input-code" id="onlineGameCode" type="text" placeholder="Enter 6-digit code..." maxlength="6">
+                    </div>
+                    <div class="online-field">
+                        <label class="online-label">Server URL</label>
+                        <input class="online-input" id="onlineServerUrlJoin" type="text" value="ws://localhost:8765">
+                    </div>
+                    <button class="btn btn-primary btn-online-action" id="onlineBtnJoin">
+                        <span class="online-btn-icon">🔗</span>
+                        Join Game
+                    </button>
+                </div>
+
+                <!-- Connection Status -->
+                <div class="online-status" id="onlineStatus">
+                    <span class="online-status-dot" id="onlineStatusDot"></span>
+                    <span id="onlineStatusText">Ready to connect</span>
+                </div>
+
+                <!-- Waiting / In-Game Info -->
+                <div class="online-info" id="onlineInfo" style="display:none">
+                    <div class="online-info-content" id="onlineInfoContent"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="online.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
