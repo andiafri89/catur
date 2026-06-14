@@ -8,7 +8,8 @@
 // PRODUCTION: Ganti URL ini dengan WebSocket server kamu
 // Contoh: 'wss://chess-server.onrender.com'
 // LOCAL: 'ws://localhost:8765'
-const SERVER_URL = 'ws://localhost:8765';
+const SERVER_URL = 'wss://5aaa9e18bcc0bf.lhr.life';
+
 // ───────────────────────────────────────────────────────
 
 class OnlineGameManager {
