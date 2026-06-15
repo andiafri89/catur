@@ -20,8 +20,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import websockets
-from websockets.server import WebSocketServerProtocol
 from websockets.exceptions import ConnectionClosed
+from websockets.asyncio.server import ServerConnection
 
 # ─── Logging ───────────────────────────────────────────────
 logging.basicConfig(
@@ -37,7 +37,7 @@ logger = logging.getLogger('chess-server')
 class Player:
     name: str
     color: str  # 'w' or 'b'
-    websocket: WebSocketServerProtocol
+    websocket: ServerConnection
 
     @property
     def id(self):
@@ -67,7 +67,7 @@ player_map: dict[int, tuple[str, str]] = {}  # websocket_id -> (game_code, color
 
 
 # ─── Helpers ───────────────────────────────────────────────
-def generate_code(length: int = 4) -> str:
+def generate_code(length: int = 6) -> str:
     """Generate a unique alphanumeric game code."""
     chars = string.ascii_uppercase + string.digits
     while True:
@@ -93,7 +93,7 @@ def find_opponent(game_code: str, my_color: str) -> Optional[Player]:
     return find_player(game_code, 'b' if my_color == 'w' else 'w')
 
 
-async def send_json(websocket: WebSocketServerProtocol, data: dict):
+async def send_json(websocket: ServerConnection, data: dict):
     """Send JSON data to a websocket connection safely."""
     try:
         await websocket.send(json.dumps(data))
@@ -119,7 +119,7 @@ async def cleanup_game(game_code: str):
 
 
 # ─── Message Handlers ──────────────────────────────────────
-async def handle_create_game(websocket: WebSocketServerProtocol, data: dict):
+async def handle_create_game(websocket: ServerConnection, data: dict):
     """Create a new game room."""
     player_name = data.get('playerName', 'Player').strip() or 'Player'
     code = generate_code()
@@ -142,7 +142,7 @@ async def handle_create_game(websocket: WebSocketServerProtocol, data: dict):
     logger.info(f'🎮 {player_name} created game {code}')
 
 
-async def handle_join_game(websocket: WebSocketServerProtocol, data: dict):
+async def handle_join_game(websocket: ServerConnection, data: dict):
     """Join an existing game room."""
     code = data.get('gameCode', '').upper().strip()
     player_name = data.get('playerName', 'Player').strip() or 'Player'
@@ -196,7 +196,7 @@ async def handle_join_game(websocket: WebSocketServerProtocol, data: dict):
     logger.info(f'👋 {player_name} joined game {code} — game started!')
 
 
-async def handle_move(websocket: WebSocketServerProtocol, data: dict):
+async def handle_move(websocket: ServerConnection, data: dict):
     """Handle a chess move from a player."""
     code = data.get('gameCode', '')
     move_data = data.get('move', {})
@@ -248,7 +248,7 @@ async def handle_move(websocket: WebSocketServerProtocol, data: dict):
     })
 
 
-async def handle_resign(websocket: WebSocketServerProtocol, data: dict):
+async def handle_resign(websocket: ServerConnection, data: dict):
     """Handle a player resigning."""
     code = data.get('gameCode', '')
     conn_info = player_map.get(id(websocket))
@@ -277,7 +277,7 @@ async def handle_resign(websocket: WebSocketServerProtocol, data: dict):
     logger.info(f'🏳️ {conn_info[1]} resigned in game {code}')
 
 
-async def handle_offer_draw(websocket: WebSocketServerProtocol, data: dict):
+async def handle_offer_draw(websocket: ServerConnection, data: dict):
     """Handle a draw offer."""
     code = data.get('gameCode', '')
     conn_info = player_map.get(id(websocket))
@@ -302,7 +302,7 @@ async def handle_offer_draw(websocket: WebSocketServerProtocol, data: dict):
         logger.info(f'🤝 {player.name} offered a draw in game {code}')
 
 
-async def handle_draw_response(websocket: WebSocketServerProtocol, data: dict):
+async def handle_draw_response(websocket: ServerConnection, data: dict):
     """Handle a player's response to a draw offer."""
     code = data.get('gameCode', '')
     accept = data.get('accept', False)
@@ -336,7 +336,7 @@ async def handle_draw_response(websocket: WebSocketServerProtocol, data: dict):
             logger.info(f'❌ Draw declined in game {code}')
 
 
-async def handle_rematch(websocket: WebSocketServerProtocol, data: dict):
+async def handle_rematch(websocket: ServerConnection, data: dict):
     """Handle a rematch request."""
     code = data.get('gameCode', '')
     conn_info = player_map.get(id(websocket))
@@ -367,7 +367,7 @@ async def handle_rematch(websocket: WebSocketServerProtocol, data: dict):
     logger.info(f'🔄 Rematch requested in game {code}')
 
 
-async def handle_rematch_response(websocket: WebSocketServerProtocol, data: dict):
+async def handle_rematch_response(websocket: ServerConnection, data: dict):
     """Handle rematch response."""
     code = data.get('gameCode', '')
     accept = data.get('accept', False)
@@ -399,13 +399,13 @@ async def handle_rematch_response(websocket: WebSocketServerProtocol, data: dict
         })
 
 
-async def handle_ping(websocket: WebSocketServerProtocol, data: dict):
+async def handle_ping(websocket: ServerConnection, data: dict):
     """Respond to keep-alive ping."""
     await send_json(websocket, {'type': 'pong'})
 
 
 # ─── Connection Lifecycle ──────────────────────────────────
-async def handle_disconnect(websocket: WebSocketServerProtocol):
+async def handle_disconnect(websocket: ServerConnection):
     """Handle a player disconnection."""
     conn_info = player_map.pop(id(websocket), None)
     if not conn_info:
@@ -450,7 +450,7 @@ async def handle_disconnect(websocket: WebSocketServerProtocol):
         await cleanup_game(code)
 
 
-async def connection_handler(websocket: WebSocketServerProtocol):
+async def connection_handler(websocket: ServerConnection):
     """Main handler for each WebSocket connection."""
     address = websocket.remote_address
     logger.info(f'🔗 New connection from {address}')
