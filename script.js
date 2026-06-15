@@ -883,7 +883,11 @@ class ChessUI {
         this.boardFlipped = false;
         this.isAIEnabled = true;
         this.isAIThinking = false;
-        this.gameMode = 'ai'; // 'ai' or 'two-player'
+        this.gameMode = 'ai'; // 'ai', 'two-player', or 'online'
+        this.isOnlineMode = false;
+        this.onlineManager = null;
+        this.onlineGameStarted = false;
+        this._pendingOnlineAction = null;
         this.pendingPromotion = null;
 
         this.init();
@@ -1010,6 +1014,7 @@ class ChessUI {
     onSquareClick(row, col) {
         if (this.engine.gameOver || this.isAIThinking) return;
         if (this.isAIEnabled && this.engine.turn === COLORS.BLACK) return;
+        if (this.isOnlineMode && this.onlineManager && !this.onlineManager.isMyTurn(this.engine.turn)) return;
 
         const piece = this.engine.board[row][col];
 
@@ -1128,6 +1133,16 @@ class ChessUI {
             if (this.isAIEnabled && !this.engine.gameOver && this.engine.turn === COLORS.BLACK) {
                 this.scheduleAIMove();
             }
+
+            // Online: send move to opponent
+            if (this.isOnlineMode && this.onlineManager && this.onlineManager.connected) {
+                this.onlineManager.sendMove(
+                    fromRow, fromCol, toRow, toCol,
+                    result.promotion || null,
+                    this.engine.gameOver,
+                    this.engine.gameOver ? this.engine.gameResult : null
+                );
+            }
         } else {
             // Invalid move - shake animation
             const square = this.getSquareElement(toRow, toCol);
@@ -1199,6 +1214,16 @@ class ChessUI {
                 this.updateCapturedPieces();
                 this.updateStatus();
 
+                // Online: send promotion move to opponent
+                if (this.isOnlineMode && this.onlineManager && this.onlineManager.connected) {
+                    this.onlineManager.sendMove(
+                        fromRow, fromCol, toRow, toCol,
+                        type,
+                        this.engine.gameOver,
+                        this.engine.gameOver ? this.engine.gameResult : null
+                    );
+                }
+
                 if (this.isAIEnabled && !this.engine.gameOver && this.engine.turn === COLORS.BLACK) {
                     this.scheduleAIMove();
                 }
@@ -1230,6 +1255,19 @@ class ChessUI {
             this.statusElement.textContent = 'AI Thinking...';
             this.statusElement.classList.remove('active');
             this.turnIndicator.style.display = 'none';
+            return;
+        }
+
+        // Online mode status
+        if (this.isOnlineMode && this.onlineManager && this.onlineGameStarted) {
+            const isMyTurn = this.onlineManager.isMyTurn(this.engine.turn);
+            if (isMyTurn) {
+                this.statusElement.textContent = 'Your Turn';
+            } else {
+                this.statusElement.textContent = `${this.onlineManager.opponentName || 'Opponent'}'s Turn`;
+            }
+            this.statusElement.classList.add('active');
+            this.turnIndicator.style.display = 'block';
             return;
         }
 
@@ -1344,6 +1382,11 @@ class ChessUI {
         this.gameModalSubtitle.textContent = subtitle;
         this.gameModalIcon.textContent = icon;
         this.gameOverModal.classList.add('show');
+
+        // Show rematch button in online mode
+        if (this.isOnlineMode && this.onlineManager && this.onlineManager.connected) {
+            document.getElementById('btnRematch').style.display = 'inline-flex';
+        }
     }
 
     newGame() {
@@ -1378,28 +1421,51 @@ class ChessUI {
     }
 
     toggleGameMode() {
-        this.isAIEnabled = !this.isAIEnabled;
-        this.gameMode = this.isAIEnabled ? 'ai' : 'two-player';
+        // Cycle: ai -> two-player -> online -> ai
+        if (this.gameMode === 'ai') {
+            this.gameMode = 'two-player';
+            this.isAIEnabled = false;
+            this.isOnlineMode = false;
+        } else if (this.gameMode === 'two-player') {
+            this.gameMode = 'online';
+            this.isAIEnabled = false;
+            this.isOnlineMode = true;
+            this.showOnlineLobby();
+        } else {
+            // online -> close lobby, go back to ai
+            this.hideOnlineLobby();
+            if (this.onlineManager) {
+                this.onlineManager.disconnect();
+                this.onlineManager = null;
+            }
+            this.isOnlineMode = false;
+            this.isAIEnabled = true;
+            this.gameMode = 'ai';
+        }
 
         // Update UI
         const modeLabel = document.getElementById('modeLabel');
         const modeIndicator = document.getElementById('modeIndicator');
         const blackPlayerName = document.getElementById('blackPlayerName');
 
-        if (this.isAIEnabled) {
+        if (this.gameMode === 'ai') {
             modeLabel.textContent = 'vs AI';
-            modeIndicator.classList.add('two-player');
-            modeIndicator.classList.remove('ai');
+            modeIndicator.className = 'mode-indicator';
             blackPlayerName.textContent = 'AI';
-        } else {
+        } else if (this.gameMode === 'two-player') {
             modeLabel.textContent = 'vs Player';
-            modeIndicator.classList.remove('two-player');
-            modeIndicator.classList.add('ai');
+            modeIndicator.className = 'mode-indicator two-player';
             blackPlayerName.textContent = 'Black';
+        } else {
+            modeLabel.textContent = 'Online';
+            modeIndicator.className = 'mode-indicator online';
+            blackPlayerName.textContent = 'Opponent';
         }
 
-        // Reset game when switching modes
-        this.newGame();
+        // Reset game when switching modes (not for online, lobby just opened)
+        if (this.gameMode !== 'online') {
+            this.newGame();
+        }
     }
 
     setupEventListeners() {
@@ -1407,9 +1473,57 @@ class ChessUI {
         document.getElementById('btnFlip').addEventListener('click', () => this.flipBoard());
         document.getElementById('btnUndo').addEventListener('click', () => this.undoMove());
         document.getElementById('btnPlayAgain').addEventListener('click', () => this.newGame());
+        document.getElementById('btnRematch').addEventListener('click', () => {
+            if (this.onlineManager) this.onlineManager.requestRematch();
+        });
         document.getElementById('btnResign').addEventListener('click', () => this.resign());
         document.getElementById('btnDraw').addEventListener('click', () => this.offerDraw());
         document.getElementById('btnGameMode').addEventListener('click', () => this.toggleGameMode());
+
+        // Online lobby listeners
+        document.getElementById('onlineClose').addEventListener('click', () => {
+            this.hideOnlineLobby();
+            if (this.onlineManager) {
+                this.onlineManager.disconnect();
+                this.onlineManager = null;
+            }
+            this.isOnlineMode = false;
+            this.gameMode = 'ai';
+            this.isAIEnabled = true;
+            document.getElementById('modeLabel').textContent = 'vs AI';
+            document.getElementById('modeIndicator').className = 'mode-indicator';
+            document.getElementById('blackPlayerName').textContent = 'AI';
+            this.newGame();
+        });
+
+        document.getElementById('onlineTabCreate').addEventListener('click', () => {
+            document.getElementById('onlineTabCreate').classList.add('active');
+            document.getElementById('onlineTabJoin').classList.remove('active');
+            document.getElementById('onlinePanelCreate').style.display = 'flex';
+            document.getElementById('onlinePanelJoin').style.display = 'none';
+            document.getElementById('onlineInfo').style.display = 'none';
+            this.updateOnlineStatus('', 'Ready to connect');
+        });
+
+        document.getElementById('onlineTabJoin').addEventListener('click', () => {
+            document.getElementById('onlineTabJoin').classList.add('active');
+            document.getElementById('onlineTabCreate').classList.remove('active');
+            document.getElementById('onlinePanelJoin').style.display = 'flex';
+            document.getElementById('onlinePanelCreate').style.display = 'none';
+            document.getElementById('onlineInfo').style.display = 'none';
+            this.updateOnlineStatus('', 'Ready to connect');
+        });
+
+        document.getElementById('onlineBtnCreate').addEventListener('click', () => {
+            const name = document.getElementById('onlineNameCreate').value.trim() || 'Player 1';
+            this.createOnlineGame(name);
+        });
+
+        document.getElementById('onlineBtnJoin').addEventListener('click', () => {
+            const name = document.getElementById('onlineNameJoin').value.trim() || 'Player 2';
+            const code = document.getElementById('onlineGameCode').value.trim();
+            this.joinOnlineGame(code, name);
+        });
 
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
@@ -1417,12 +1531,13 @@ class ChessUI {
             if (e.key === 'f' || e.key === 'F') this.flipBoard();
             if (e.key === 'z' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
-                this.undoMove();
+                if (!this.isOnlineMode) this.undoMove();
             }
         });
     }
 
     undoMove() {
+        if (this.isOnlineMode) return; // Undo tidak tersedia di online mode
         if (this.engine.moveHistory.length === 0) return;
         if (this.isAIThinking) return;
 
@@ -1463,10 +1578,23 @@ class ChessUI {
         this.gameOverModal.classList.add('show');
         this.updateStatus();
         this.render();
+
+        // Online: send resign
+        if (this.isOnlineMode && this.onlineManager && this.onlineManager.connected) {
+            this.onlineManager.sendResign();
+        }
     }
 
     offerDraw() {
         if (this.engine.gameOver) return;
+
+        // Online mode: send draw offer
+        if (this.isOnlineMode && this.onlineManager && this.onlineManager.connected) {
+            this.onlineManager.offerDraw();
+            this.statusElement.textContent = 'Draw offered';
+            setTimeout(() => this.updateStatus(), 1500);
+            return;
+        }
 
         if (this.isAIEnabled) {
             if (this.engine.turn === COLORS.BLACK) return;
@@ -1497,6 +1625,250 @@ class ChessUI {
             this.updateStatus();
             this.render();
         }
+    }
+
+    // ==================== ONLINE METHODS ====================
+
+    showOnlineLobby() {
+        document.getElementById('onlineOverlay').classList.add('show');
+        this.resetOnlinePanel();
+    }
+
+    hideOnlineLobby() {
+        document.getElementById('onlineOverlay').classList.remove('show');
+    }
+
+    resetOnlinePanel() {
+        document.getElementById('onlineStatusDot').className = 'online-status-dot';
+        document.getElementById('onlineStatusText').textContent = 'Ready to connect';
+        document.getElementById('onlineInfo').style.display = 'none';
+        document.getElementById('onlineCodeBadge').style.display = 'none';
+    }
+
+    updateOnlineStatus(state, text) {
+        const dot = document.getElementById('onlineStatusDot');
+        const textEl = document.getElementById('onlineStatusText');
+        dot.className = 'online-status-dot';
+        if (state === 'connected') dot.classList.add('connected');
+        else if (state === 'connecting') dot.classList.add('connecting');
+        else if (state === 'error') dot.classList.add('error');
+        textEl.textContent = text;
+    }
+
+    updateOnlineCodeBadge(code) {
+        const badge = document.getElementById('onlineCodeBadge');
+        badge.textContent = `#${code}`;
+        badge.style.display = 'inline-flex';
+        badge.title = 'Click to copy game code';
+        badge.onclick = () => {
+            if (this.onlineManager) this.onlineManager.copyGameCode();
+        };
+    }
+
+    showOnlineInfo(html) {
+        const info = document.getElementById('onlineInfo');
+        const content = document.getElementById('onlineInfoContent');
+        content.innerHTML = html;
+        info.style.display = 'block';
+        document.getElementById('onlinePanelCreate').style.display = 'none';
+        document.getElementById('onlinePanelJoin').style.display = 'none';
+        document.querySelectorAll('.online-tab').forEach(t => t.classList.remove('active'));
+    }
+
+    hideOnlineInfo() {
+        document.getElementById('onlineInfo').style.display = 'none';
+    }
+
+    connectToServer(serverUrl) {
+        if (this.onlineManager) {
+            this.onlineManager.disconnect();
+            this.onlineManager = null;
+        }
+        this.onlineManager = new OnlineGameManager();
+        this.setupOnlineCallbacks();
+        this.updateOnlineStatus('connecting', 'Connecting...');
+        this.onlineManager.connect(serverUrl);
+    }
+
+    setupOnlineCallbacks() {
+        const mgr = this.onlineManager;
+        if (!mgr) return;
+
+        mgr.onConnectionEstablished = () => {
+            this.updateOnlineStatus('connected', 'Connected to server');
+            // Execute pending action if any
+            if (this._pendingOnlineAction) {
+                const { action, playerName, gameCode } = this._pendingOnlineAction;
+                if (action === 'create') {
+                    mgr.createGame(playerName);
+                } else if (action === 'join') {
+                    mgr.joinGame(gameCode, playerName);
+                }
+                this._pendingOnlineAction = null;
+            }
+        };
+
+        mgr.onDisconnected = () => {
+            this.updateOnlineStatus('error', 'Disconnected from server');
+        };
+
+        mgr.onReconnecting = (attempt, max) => {
+            this.updateOnlineStatus('connecting', `Reconnecting (${attempt}/${max})...`);
+        };
+
+        mgr.onGameCreated = (data) => {
+            this.showOnlineInfo(`
+                <div>Game created! Share this code:</div>
+                <div class="game-code-display">${data.gameCode}</div>
+                <div class="waiting-text">Waiting for opponent...</div>
+            `);
+            this.updateOnlineCodeBadge(data.gameCode);
+        };
+
+        mgr.onGameJoined = (data) => {
+            this.isOnlineMode = true;
+            this.onlineGameStarted = true;
+            this.hideOnlineLobby();
+
+            // Update player names
+            if (this.onlineManager.myColor === 'w') {
+                document.getElementById('whitePlayerName').textContent = this.onlineManager.myName || 'You';
+                document.getElementById('blackPlayerName').textContent = data.opponentName || 'Opponent';
+            } else {
+                document.getElementById('whitePlayerName').textContent = data.opponentName || 'Opponent';
+                document.getElementById('blackPlayerName').textContent = this.onlineManager.myName || 'You';
+            }
+
+            this.newGame();
+            this.updateStatus();
+        };
+
+        mgr.onOpponentJoined = (data) => {
+            this.isOnlineMode = true;
+            this.onlineGameStarted = true;
+            this.hideOnlineLobby();
+
+            // Update player names
+            if (this.onlineManager.myColor === 'w') {
+                document.getElementById('whitePlayerName').textContent = this.onlineManager.myName || 'You';
+                document.getElementById('blackPlayerName').textContent = this.onlineManager.opponentName || 'Opponent';
+            } else {
+                document.getElementById('whitePlayerName').textContent = this.onlineManager.opponentName || 'Opponent';
+                document.getElementById('blackPlayerName').textContent = this.onlineManager.myName || 'You';
+            }
+
+            this.newGame();
+            this.updateStatus();
+        };
+
+        mgr.onMoveReceived = (data) => {
+            const move = data.move;
+            const result = this.engine.makeMove(move.from.row, move.from.col, move.to.row, move.to.col, move.promotion);
+            if (result) {
+                this.selectedSquare = null;
+                this.legalMoves = [];
+                this.animateMove(move.from.row, move.from.col, move.to.row, move.to.col);
+                this.render();
+                this.updateMoveHistory();
+                this.updateCapturedPieces();
+                this.updateStatus();
+                if (this.engine.gameOver) {
+                    setTimeout(() => this.showGameOverModal(), 500);
+                }
+            }
+        };
+
+        mgr.onGameOver = (data) => {
+            if (!this.engine.gameOver) {
+                this.engine.gameOver = true;
+                this.engine.gameResult = data.result || '½-½';
+                this.render();
+                this.updateStatus();
+                setTimeout(() => this.showGameOverModal(), 500);
+            }
+        };
+
+        mgr.onOpponentDisconnected = () => {
+            this.statusElement.textContent = 'Opponent disconnected';
+            this.statusElement.classList.add('active');
+        };
+
+        mgr.onDrawOffered = () => {
+            if (confirm('Opponent offers a draw. Accept?')) {
+                if (this.onlineManager) this.onlineManager.respondDraw(true);
+                this.engine.gameOver = true;
+                this.engine.gameResult = '½-½';
+                this.gameModalTitle.textContent = 'Draw';
+                this.gameModalSubtitle.textContent = 'Draw agreed';
+                this.gameModalIcon.textContent = '🤝';
+                this.gameOverModal.classList.add('show');
+                this.updateStatus();
+                this.render();
+            } else {
+                if (this.onlineManager) this.onlineManager.respondDraw(false);
+                this.statusElement.textContent = 'Draw declined';
+                setTimeout(() => this.updateStatus(), 1500);
+            }
+        };
+
+        mgr.onDrawDeclined = () => {
+            this.statusElement.textContent = 'Opponent declined draw';
+            setTimeout(() => this.updateStatus(), 1500);
+        };
+
+        mgr.onRematchRequested = () => {
+            if (confirm('Opponent requests a rematch. Accept?')) {
+                if (this.onlineManager) this.onlineManager.respondRematch(true);
+            } else {
+                if (this.onlineManager) this.onlineManager.respondRematch(false);
+            }
+        };
+
+        mgr.onRematchStarted = () => {
+            this.onlineGameStarted = true;
+            this.hideOnlineLobby();
+            document.getElementById('btnRematch').style.display = 'none';
+            this.newGame();
+            this.updateStatus();
+        };
+
+        mgr.onRematchDeclined = () => {
+            this.statusElement.textContent = 'Opponent declined rematch';
+            setTimeout(() => this.updateStatus(), 1500);
+        };
+
+        mgr.onGameCodeCopied = (code) => {
+            this.updateOnlineStatus('connected', `Code "${code}" copied!`);
+            setTimeout(() => this.updateOnlineStatus('connected', 'Connected to server'), 2000);
+        };
+
+        mgr.onError = (message) => {
+            this.updateOnlineStatus('error', `Error: ${message}`);
+        };
+    }
+
+    createOnlineGame(playerName) {
+        const serverUrl = document.getElementById('onlineServerUrl').value.trim();
+        if (!serverUrl) {
+            this.updateOnlineStatus('error', 'Please enter a server URL');
+            return;
+        }
+        this._pendingOnlineAction = { action: 'create', playerName };
+        this.connectToServer(serverUrl);
+    }
+
+    joinOnlineGame(gameCode, playerName) {
+        const serverUrl = document.getElementById('onlineServerUrlJoin').value.trim();
+        if (!serverUrl) {
+            this.updateOnlineStatus('error', 'Please enter a server URL');
+            return;
+        }
+        if (!gameCode || gameCode.length !== 6) {
+            this.updateOnlineStatus('error', 'Please enter a valid 6-digit code');
+            return;
+        }
+        this._pendingOnlineAction = { action: 'join', gameCode, playerName };
+        this.connectToServer(serverUrl);
     }
 }
 
